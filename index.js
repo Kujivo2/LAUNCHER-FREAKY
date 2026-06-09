@@ -5,12 +5,13 @@ remoteMain.initialize()
 const { app, BrowserWindow, ipcMain, Menu, shell } = require('electron')
 const autoUpdater                       = require('electron-updater').autoUpdater
 const ejse                              = require('ejs-electron')
+const crypto                            = require('crypto')
 const fs                                = require('fs')
 const isDev                             = require('./app/assets/js/isdev')
 const path                              = require('path')
 const semver                            = require('semver')
 const { pathToFileURL }                 = require('url')
-const { AZURE_CLIENT_ID, MSFT_OPCODE, MSFT_REPLY_TYPE, MSFT_ERROR, SHELL_OPCODE } = require('./app/assets/js/ipcconstants')
+const { AZURE_CLIENT_ID, MICROSOFT_REDIRECT_URI, MSFT_OPCODE, MSFT_REPLY_TYPE, MSFT_ERROR, SHELL_OPCODE } = require('./app/assets/js/ipcconstants')
 const LangLoader                        = require('./app/assets/js/langloader')
 const LauncherConfig                    = require('./app/assets/js/launcherconfig')
 
@@ -116,7 +117,20 @@ ipcMain.handle(SHELL_OPCODE.TRASH_ITEM, async (event, ...args) => {
 app.disableHardwareAcceleration()
 
 
-const REDIRECT_URI_PREFIX = 'https://login.microsoftonline.com/common/oauth2/nativeclient?'
+const MICROSOFT_AUTHORIZE_ENDPOINT = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize'
+const LEGACY_HELIOS_CLIENT_ID = '1ce6e35a-126f-48fd-97fb-54d143ac6d45'
+
+function base64Url(buffer) {
+    return buffer.toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '')
+}
+
+function isValidMicrosoftClientId(clientId) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientId)
+        && clientId.toLowerCase() !== LEGACY_HELIOS_CLIENT_ID
+}
 
 // Microsoft Auth Login
 let msftAuthWindow
@@ -128,9 +142,23 @@ ipcMain.on(MSFT_OPCODE.OPEN_LOGIN, (ipcEvent, ...arguments_) => {
         ipcEvent.reply(MSFT_OPCODE.REPLY_LOGIN, MSFT_REPLY_TYPE.ERROR, MSFT_ERROR.ALREADY_OPEN, msftAuthViewOnClose)
         return
     }
-    msftAuthSuccess = false
     msftAuthViewSuccess = arguments_[0]
     msftAuthViewOnClose = arguments_[1]
+    if(!isValidMicrosoftClientId(AZURE_CLIENT_ID)) {
+        ipcEvent.reply(
+            MSFT_OPCODE.REPLY_LOGIN,
+            MSFT_REPLY_TYPE.ERROR,
+            MSFT_ERROR.CONFIGURATION,
+            msftAuthViewOnClose,
+            'Renseigne minecraftAuth.microsoftClientId dans package.json avec ton propre Application (client) ID Microsoft Entra.'
+        )
+        return
+    }
+
+    msftAuthSuccess = false
+    const codeVerifier = base64Url(crypto.randomBytes(64))
+    const codeChallenge = base64Url(crypto.createHash('sha256').update(codeVerifier).digest())
+    const oauthState = base64Url(crypto.randomBytes(32))
     msftAuthWindow = new BrowserWindow({
         title: LangLoader.queryJS('index.microsoftLoginTitle'),
         backgroundColor: '#222222',
@@ -150,24 +178,86 @@ ipcMain.on(MSFT_OPCODE.OPEN_LOGIN, (ipcEvent, ...arguments_) => {
         }
     })
 
-    msftAuthWindow.webContents.on('did-navigate', (_, uri) => {
-        if (uri.startsWith(REDIRECT_URI_PREFIX)) {
-            let queryMap = {}
-            
-            new URL(uri).searchParams.forEach((v, k) => {
-                queryMap[k] = v
-            })
+    const handleMicrosoftRedirect = (uri) => {
+        if(!uri.startsWith(MICROSOFT_REDIRECT_URI) || msftAuthSuccess) {
+            return
+        }
 
+        const queryMap = {}
+        new URL(uri).searchParams.forEach((value, key) => {
+            queryMap[key] = value
+        })
+
+        msftAuthSuccess = true
+        if(queryMap.state !== oauthState) {
+            ipcEvent.reply(
+                MSFT_OPCODE.REPLY_LOGIN,
+                MSFT_REPLY_TYPE.ERROR,
+                MSFT_ERROR.OAUTH,
+                msftAuthViewOnClose,
+                'La reponse Microsoft est invalide (state OAuth incorrect). Reessaie la connexion.'
+            )
+        } else if(queryMap.error != null) {
+            ipcEvent.reply(
+                MSFT_OPCODE.REPLY_LOGIN,
+                MSFT_REPLY_TYPE.ERROR,
+                MSFT_ERROR.OAUTH,
+                msftAuthViewOnClose,
+                queryMap.error_description || queryMap.error
+            )
+        } else if(queryMap.code == null) {
+            ipcEvent.reply(
+                MSFT_OPCODE.REPLY_LOGIN,
+                MSFT_REPLY_TYPE.ERROR,
+                MSFT_ERROR.OAUTH,
+                msftAuthViewOnClose,
+                'Microsoft n a retourne aucun code d autorisation.'
+            )
+        } else {
+            queryMap.code_verifier = codeVerifier
             ipcEvent.reply(MSFT_OPCODE.REPLY_LOGIN, MSFT_REPLY_TYPE.SUCCESS, queryMap, msftAuthViewSuccess)
+        }
 
-            msftAuthSuccess = true
-            msftAuthWindow.close()
-            msftAuthWindow = null
+        msftAuthWindow?.close()
+        msftAuthWindow = null
+    }
+
+    msftAuthWindow.webContents.on('will-redirect', (event, uri) => {
+        if(uri.startsWith(MICROSOFT_REDIRECT_URI)) {
+            event.preventDefault()
+            handleMicrosoftRedirect(uri)
         }
     })
+    msftAuthWindow.webContents.on('did-navigate', (_, uri) => handleMicrosoftRedirect(uri))
 
     msftAuthWindow.removeMenu()
-    msftAuthWindow.loadURL(`https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?prompt=select_account&client_id=${AZURE_CLIENT_ID}&response_type=code&scope=XboxLive.signin%20offline_access&redirect_uri=https://login.microsoftonline.com/common/oauth2/nativeclient`)
+    const authorizeUrl = new URL(MICROSOFT_AUTHORIZE_ENDPOINT)
+    authorizeUrl.search = new URLSearchParams({
+        client_id: AZURE_CLIENT_ID,
+        response_type: 'code',
+        redirect_uri: MICROSOFT_REDIRECT_URI,
+        response_mode: 'query',
+        scope: 'XboxLive.signin offline_access',
+        prompt: 'select_account',
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256',
+        state: oauthState
+    }).toString()
+    msftAuthWindow.loadURL(authorizeUrl.toString()).catch(err => {
+        if(msftAuthSuccess) {
+            return
+        }
+        msftAuthSuccess = true
+        ipcEvent.reply(
+            MSFT_OPCODE.REPLY_LOGIN,
+            MSFT_REPLY_TYPE.ERROR,
+            MSFT_ERROR.OAUTH,
+            msftAuthViewOnClose,
+            `Impossible d ouvrir la connexion Microsoft: ${err.message}`
+        )
+        msftAuthWindow?.close()
+        msftAuthWindow = null
+    })
 })
 
 // Microsoft Auth Logout

@@ -342,6 +342,15 @@ settingsNavDone.onclick = () => {
 const msftLoginLogger = LoggerUtil.getLogger('Microsoft Login')
 const msftLogoutLogger = LoggerUtil.getLogger('Microsoft Logout')
 
+function escapeMicrosoftError(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;')
+}
+
 // Bind the add mojang account button.
 document.getElementById('settingsAddMojangAccount').onclick = (e) => {
     switchView(getCurrentView(), VIEWS.login, 500, 500, () => {
@@ -372,10 +381,13 @@ ipcRenderer.on(MSFT_OPCODE.REPLY_LOGIN, (_, ...arguments_) => {
                 return
             }
 
+            const errorMessage = arguments_[3] == null
+                ? Lang.queryJS('settings.msftLogin.errorMessage')
+                : escapeMicrosoftError(arguments_[3])
             // Unexpected error.
             setOverlayContent(
                 Lang.queryJS('settings.msftLogin.errorTitle'),
-                Lang.queryJS('settings.msftLogin.errorMessage'),
+                errorMessage,
                 Lang.queryJS('settings.msftLogin.okButton')
             )
             setOverlayHandler(() => {
@@ -414,7 +426,7 @@ ipcRenderer.on(MSFT_OPCODE.REPLY_LOGIN, (_, ...arguments_) => {
             msftLoginLogger.info('Acquired authCode, proceeding with authentication.')
 
             const authCode = queryMap.code
-            AuthManager.addMicrosoftAccount(authCode).then(value => {
+            AuthManager.addMicrosoftAccount(authCode, queryMap.code_verifier).then(value => {
                 updateSelectedAccount(value)
                 switchView(getCurrentView(), viewOnClose, 500, 500, async () => {
                     await prepareSettings()

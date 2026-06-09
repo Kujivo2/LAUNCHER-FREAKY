@@ -28,13 +28,33 @@ Authenticating with Microsoft is fully supported by Khaeris Launcher.
 9. Copy **Application (client) ID**.
 
 
-## Adding the Entra Client ID to Khaeris Launcher.
+## Adding the Entra Client ID to Khaeris Launcher
 
-In `app/assets/js/ipcconstants.js` you'll find **`AZURE_CLIENT_ID`**. Set it to your application's id.
+Set the application ID in `package.json`:
+
+```json
+"minecraftAuth": {
+    "microsoftClientId": "YOUR-APPLICATION-CLIENT-ID"
+}
+```
+
+For local tests, it can also be overridden without editing the file:
+
+```powershell
+$env:KHAERIS_MICROSOFT_CLIENT_ID = 'YOUR-APPLICATION-CLIENT-ID'
+npm.cmd start
+```
 
 Note: Entra Client ID is NOT a secret value and **can** be stored in git. Reference: https://stackoverflow.com/questions/57306964/are-azure-active-directorys-tenantid-and-clientid-considered-secrets
 
-Then relaunch your app, and login. You'll be greeted with an error message, because the app isn't whitelisted yet. Microsoft needs some activity on the app before whitelisting it. __Trying to log in before requesting whitelist is mandatory.__
+In **Authentication**, add the **Mobile and desktop applications** platform,
+register exactly:
+
+```text
+https://login.microsoftonline.com/common/oauth2/nativeclient
+```
+
+Then enable **Allow public client flows** under advanced settings.
 
 ## Requesting whitelisting from Microsoft
 

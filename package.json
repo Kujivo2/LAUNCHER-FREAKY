@@ -10,6 +10,9 @@
     "url": "https://github.com/Kujivo2/KhaerisLauncher/issues"
   },
   "private": true,
+  "minecraftAuth": {
+    "microsoftClientId": ""
+  },
   "main": "index.js",
     "scripts": {
     "start": "electron .",

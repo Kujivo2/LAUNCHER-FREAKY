@@ -10,14 +10,16 @@
  */
 // Requirements
 const ConfigManager          = require('./configmanager')
+const got                    = require('got')
 const { LoggerUtil }         = require('helios-core')
 const { RestResponseStatus } = require('helios-core/common')
 const { MojangRestAPI, MojangErrorCode } = require('helios-core/mojang')
 const { MicrosoftAuth, MicrosoftErrorCode } = require('helios-core/microsoft')
-const { AZURE_CLIENT_ID }    = require('./ipcconstants')
+const { AZURE_CLIENT_ID, MICROSOFT_REDIRECT_URI } = require('./ipcconstants')
 const Lang = require('./langloader')
 
 const log = LoggerUtil.getLogger('AuthManager')
+const MICROSOFT_TOKEN_ENDPOINT = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
 
 // Error messages
 
@@ -48,6 +50,53 @@ function microsoftErrorDisplayable(errorCode) {
                 title: Lang.queryJS('auth.microsoft.error.unknownTitle'),
                 desc: Lang.queryJS('auth.microsoft.error.unknownDesc')
             }
+    }
+}
+
+function escapeHTML(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;')
+}
+
+function microsoftOAuthError(error, operation) {
+    const body = error.response?.body
+    const code = body?.error || 'oauth_error'
+    const description = body?.error_description || error.message || 'Erreur Microsoft inconnue.'
+    log.error(`${operation}: ${code}`, description)
+    return {
+        title: `Connexion Microsoft: ${escapeHTML(code)}`,
+        desc: escapeHTML(description)
+    }
+}
+
+async function getMicrosoftAccessToken(entryCode, refresh, codeVerifier = null) {
+    const form = {
+        client_id: AZURE_CLIENT_ID,
+        scope: 'XboxLive.signin offline_access',
+        redirect_uri: MICROSOFT_REDIRECT_URI,
+        grant_type: refresh ? 'refresh_token' : 'authorization_code'
+    }
+    if(refresh) {
+        form.refresh_token = entryCode
+    } else {
+        form.code = entryCode
+        form.code_verifier = codeVerifier
+    }
+
+    try {
+        return (await got.post(MICROSOFT_TOKEN_ENDPOINT, {
+            form,
+            responseType: 'json',
+            timeout: {
+                request: 15000
+            }
+        })).body
+    } catch(err) {
+        throw microsoftOAuthError(err, refresh ? 'Microsoft token refresh' : 'Microsoft code exchange')
     }
 }
 
@@ -180,17 +229,17 @@ const AUTH_MODE = { FULL: 0, MS_REFRESH: 1, MC_REFRESH: 2 }
  * @param {*} authMode The auth mode.
  * @returns An object with all auth data. AccessToken object will be null when mode is MC_REFRESH.
  */
-async function fullMicrosoftAuthFlow(entryCode, authMode) {
+async function fullMicrosoftAuthFlow(entryCode, authMode, codeVerifier = null) {
     try {
 
         let accessTokenRaw
         let accessToken
         if(authMode !== AUTH_MODE.MC_REFRESH) {
-            const accessTokenResponse = await MicrosoftAuth.getAccessToken(entryCode, authMode === AUTH_MODE.MS_REFRESH, AZURE_CLIENT_ID)
-            if(accessTokenResponse.responseStatus === RestResponseStatus.ERROR) {
-                return Promise.reject(microsoftErrorDisplayable(accessTokenResponse.microsoftErrorCode))
-            }
-            accessToken = accessTokenResponse.data
+            accessToken = await getMicrosoftAccessToken(
+                entryCode,
+                authMode === AUTH_MODE.MS_REFRESH,
+                codeVerifier
+            )
             accessTokenRaw = accessToken.access_token
         } else {
             accessTokenRaw = entryCode
@@ -222,6 +271,9 @@ async function fullMicrosoftAuthFlow(entryCode, authMode) {
         }
     } catch(err) {
         log.error(err)
+        if(err?.title != null && err?.desc != null) {
+            return Promise.reject(err)
+        }
         return Promise.reject(microsoftErrorDisplayable(MicrosoftErrorCode.UNKNOWN))
     }
 }
@@ -245,9 +297,9 @@ function calculateExpiryDate(nowMs, epiresInS) {
  * @param {string} authCode The authCode obtained from microsoft.
  * @returns {Promise.<Object>} Promise which resolves the resolved authenticated account object.
  */
-exports.addMicrosoftAccount = async function(authCode) {
+exports.addMicrosoftAccount = async function(authCode, codeVerifier) {
 
-    const fullAuth = await fullMicrosoftAuthFlow(authCode, AUTH_MODE.FULL)
+    const fullAuth = await fullMicrosoftAuthFlow(authCode, AUTH_MODE.FULL, codeVerifier)
 
     // Advance expiry by 10 seconds to avoid close calls.
     const now = new Date().getTime()

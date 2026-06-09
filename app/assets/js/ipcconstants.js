@@ -1,8 +1,9 @@
-// NOTE FOR THIRD-PARTY
-// REPLACE THIS CLIENT ID WITH YOUR APPLICATION ID.
-// SEE https://github.com/dscalzi/HeliosLauncher/blob/master/docs/MicrosoftAuth.md
-exports.AZURE_CLIENT_ID = '1ce6e35a-126f-48fd-97fb-54d143ac6d45'
-// SEE NOTE ABOVE.
+const packageConfig = require('../../../package.json')
+
+exports.AZURE_CLIENT_ID = process.env.KHAERIS_MICROSOFT_CLIENT_ID
+    || packageConfig.minecraftAuth?.microsoftClientId
+    || ''
+exports.MICROSOFT_REDIRECT_URI = 'https://login.microsoftonline.com/common/oauth2/nativeclient'
 
 
 // Opcodes
@@ -20,7 +21,9 @@ exports.MSFT_REPLY_TYPE = {
 // Error types for ERROR reply.
 exports.MSFT_ERROR = {
     ALREADY_OPEN: 'MSFT_AUTH_ERR_ALREADY_OPEN',
-    NOT_FINISHED: 'MSFT_AUTH_ERR_NOT_FINISHED'
+    NOT_FINISHED: 'MSFT_AUTH_ERR_NOT_FINISHED',
+    CONFIGURATION: 'MSFT_AUTH_ERR_CONFIGURATION',
+    OAUTH: 'MSFT_AUTH_ERR_OAUTH'
 }
 
 exports.SHELL_OPCODE = {
