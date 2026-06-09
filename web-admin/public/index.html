@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Khaeris Admin</title>
+    <link rel="stylesheet" href="./panel.css">
+</head>
+<body>
+    <main>
+        <header>
+            <div>
+                <p>Khaeris Admin</p>
+                <h1>Publication du modpack</h1>
+            </div>
+            <div id="statusBadge">Chargement...</div>
+        </header>
+
+        <section id="summaryGrid">
+            <article class="summaryCard">
+                <span>Version launcher</span>
+                <strong id="launcherVersion">-</strong>
+                <small>Affichage dans le launcher</small>
+            </article>
+            <article class="summaryCard">
+                <span>Version modpack</span>
+                <strong id="currentVersion">-</strong>
+                <small id="currentLoader">Manifest non charge</small>
+            </article>
+            <article class="summaryCard">
+                <span>Derniere publication</span>
+                <strong id="lastPublish">-</strong>
+                <small id="publicManifest">manifest.json</small>
+            </article>
+        </section>
+
+        <section class="publishCard">
+            <div class="cardText">
+                <span>Action principale</span>
+                <h2>Modpack complet</h2>
+                <p>Importe un ZIP complet, remplace le modpack actuel, regenere base.zip, manifest.json et news.json, puis incremente la version.</p>
+            </div>
+            <form id="fullModpackForm">
+                <label>
+                    ZIP complet du modpack
+                    <input name="baseZip" type="file" accept=".zip" required>
+                </label>
+                <div class="fieldGrid">
+                    <label>
+                        Version launcher
+                        <input name="versionLauncher" placeholder="v2.2.2">
+                    </label>
+                    <label>
+                        Version modpack
+                        <input name="versionModpack" placeholder="vide = patch +1">
+                    </label>
+                    <label>
+                        Version Minecraft
+                        <input name="versionMinecraft" placeholder="1.20.1">
+                    </label>
+                    <label>
+                        Version loader
+                        <input name="versionLoader" placeholder="0.19.2">
+                    </label>
+                </div>
+                <button type="submit">Publier</button>
+            </form>
+        </section>
+
+        <section class="publishCard">
+            <div class="cardText">
+                <span>Mise a jour rapide</span>
+                <h2>Ajouter des mods</h2>
+                <p>Ajoute un ou plusieurs fichiers .jar dans le dossier mods actuel, recalcule les SHA256/tailles, regenere le manifest et publie la mise a jour.</p>
+            </div>
+            <form id="modsUpdateForm">
+                <label>
+                    Mods .jar
+                    <input name="mods" type="file" accept=".jar" multiple required>
+                </label>
+                <div class="fieldGrid">
+                    <label>
+                        Version launcher
+                        <input name="versionLauncher" placeholder="laisser vide">
+                    </label>
+                    <label>
+                        Version modpack
+                        <input name="versionModpack" placeholder="vide = patch +1">
+                    </label>
+                </div>
+                <button type="submit">Publier la mise a jour</button>
+            </form>
+        </section>
+
+        <section class="publishCard">
+            <div class="cardText">
+                <span>Affichage launcher</span>
+                <h2>Version launcher</h2>
+                <p>Met a jour uniquement la version affichee dans la carte infos du launcher. Le manifest du modpack ne change pas, donc aucun retéléchargement du modpack n'est declenche.</p>
+            </div>
+            <form id="launcherVersionForm">
+                <label>
+                    Version launcher
+                    <input name="versionLauncher" placeholder="v2.2.2" required>
+                </label>
+                <button type="submit">Publier</button>
+            </form>
+        </section>
+
+        <section id="resultPanel">
+            <div>
+                <h2>Resultat</h2>
+                <p id="adminMessage">Pret.</p>
+            </div>
+            <pre id="result"></pre>
+        </section>
+    </main>
+    <script src="./panel.js"></script>
+</body>
+</html>
