@@ -1,177 +1,138 @@
-# Khaeris manifest modpack flow
+# Architecture simple du launcher Khaeris
 
-Khaeris now uses a small web manifest for modpack installation and keeps the
-Helios local profile code for Minecraft, Fabric, Forge, Java, and process
-launching.
+Le projet utilise Electron pour l'interface, Helios Core pour telecharger et
+lancer Minecraft, et un unique `manifest.json` pour decrire le modpack et la
+version distante du launcher.
 
-## Local web layout
+## Demarrage du launcher
 
-The admin server writes to this XAMPP folder by default:
+1. `package.json` lance `index.js`.
+2. `index.js` cree la fenetre Electron et charge `app/app.ejs`.
+3. `app/assets/js/preloader.js` charge la configuration locale et la facade de
+   distribution.
+4. `app/assets/js/distromanager.js` cree un profil Minecraft local minimal.
+5. Le bouton `JOUER` appelle `SimpleModpackManager.syncModpack()`.
+6. Le launcher synchronise le modpack, valide Java et les fichiers Minecraft,
+   puis `ProcessBuilder` demarre le processus Java.
+
+## Synchronisation du modpack
+
+Le fichier `app/assets/js/simplemodpackmanager.js`:
+
+- telecharge `manifest.json`;
+- installe `base.zip` lors de la premiere installation ou d'un changement de
+  version Minecraft/loader;
+- compare la taille et le SHA-256 de chaque fichier;
+- telecharge uniquement les fichiers absents ou modifies;
+- supprime les fichiers presents dans l'ancien `version.json` mais absents du
+  nouveau manifest;
+- ecrit le nouvel etat local dans
+  `instances/<modpackId>/version.json`.
+
+Seuls `mods/`, `config/` et `resourcepacks/` sont geres automatiquement. Les
+mondes, captures d'ecran et options personnelles ne sont jamais supprimes.
+
+## Structure web publique
 
 ```text
-C:\xampp\htdocs\khaeris\
-|-- api\
-|   `-- draft.json
-|-- admin\
-|-- launcher\
+khaeris/
 |-- manifest.json
-|-- modpacks\
-|   `-- khaeris-fabric-1.20.1\
-|       |-- base.zip
-|       |-- mods\
-|       |-- config\
-|       `-- resourcepacks\
-`-- uploads\
-    `-- khaeris-fabric-1.20.1-draft\
+|-- news.json
+|-- launcher-info.json
+|-- launcher/
+|   |-- latest.yml
+|   |-- Khaeris Launcher-setup-2.2.2.exe
+|   `-- Khaeris Launcher-setup-2.2.2.exe.blockmap
+`-- modpacks/
+    `-- khaeris-fabric-1.20.1/
+        |-- base.zip
+        |-- mods/
+        |-- config/
+        `-- resourcepacks/
 ```
 
-Apache can serve the published manifest at:
+Apache, Nginx, GitHub Pages ou un stockage objet peuvent servir ces fichiers.
+Le panel Node est necessaire uniquement pour administrer et publier.
 
-```text
-http://localhost/khaeris/manifest.json
-```
+## Configuration
 
-The Node admin panel runs separately. Imports, additions, and removals first
-change the draft folder under `uploads/`; only `Publier` replaces the public
-files under `modpacks/` and writes a new `manifest.json`:
-
-```powershell
-npm install
-npm run admin:start
-```
-
-Open:
-
-```text
-http://localhost:3030/admin/
-```
-
-## Environment values
-
-The defaults target XAMPP on Windows:
+Les valeurs par defaut ciblent XAMPP:
 
 ```powershell
 $env:KHAERIS_WEB_ROOT = 'C:\xampp\htdocs\khaeris'
 $env:KHAERIS_PUBLIC_BASE_URL = 'http://localhost/khaeris'
 $env:KHAERIS_ADMIN_PORT = '3030'
-npm run admin:start
+npm.cmd run admin:start
 ```
 
-The launcher reads:
+Le launcher utilise la meme base publique. En developpement:
 
-```text
-http://localhost/khaeris/manifest.json
+```powershell
+$env:KHAERIS_PUBLIC_BASE_URL = 'https://launcher.exemple.fr'
+npm.cmd start
 ```
 
-Override that for a VPS or test server with `KHAERIS_MANIFEST_URL` before
-starting Electron.
+Pour une application distribuee, remplacer aussi l'URL `publish.url` dans
+`electron-builder.yml` avant le build.
 
-## Published manifest
-
-The panel generates this format:
+## Format du manifest
 
 ```json
 {
     "modpackId": "khaeris-fabric-1.20.1",
-    "version": "0.0.5",
+    "version": "1.0.1",
     "minecraftVersion": "1.20.1",
     "loader": "fabric",
     "loaderVersion": "0.19.2",
-    "baseZip": "http://localhost/khaeris/modpacks/khaeris-fabric-1.20.1/base.zip",
-    "baseZipSha256": "sha256-generated-by-admin",
+    "baseZip": "https://launcher.exemple.fr/modpacks/khaeris-fabric-1.20.1/base.zip",
+    "baseZipSha256": "...",
     "baseZipSize": 123456,
+    "launcher": {
+        "version": "v2.2.2",
+        "updateUrl": "https://launcher.exemple.fr/launcher"
+    },
     "files": [
         {
             "path": "mods/example.jar",
-            "url": "http://localhost/khaeris/modpacks/khaeris-fabric-1.20.1/mods/example.jar",
-            "sha256": "sha256-generated-by-admin",
+            "url": "https://launcher.exemple.fr/modpacks/khaeris-fabric-1.20.1/mods/example.jar",
+            "sha256": "...",
             "size": 12345
         }
     ]
 }
 ```
 
-Every published file has a SHA256 and byte size. The launcher uses `base.zip`
-for a first install, then verifies and updates individual manifest files.
+## Panel administrateur
 
-## ZIP upload
+Demarrer le panel:
 
-`POST /admin/upload-basezip` replaces the draft pack content.
-
-The upload accepts:
-
-- a normalized ZIP containing `mods/`, `config/`, and `resourcepacks/`;
-- a CurseForge-style ZIP with `manifest.json` and `overrides/`.
-
-The supplied Khaeris Fabric `1.20.1-0.0.5` archive is a CurseForge-style ZIP:
-its internal manifest declares Minecraft `1.20.1`, loader
-`fabric-0.19.2`, `overrides/`, and external CurseForge file IDs. The admin
-server extracts the override files and mirrors those CurseForge mod downloads
-into `modpacks/khaeris-fabric-1.20.1/mods/` before publishing.
-
-## Admin routes
-
-```text
-GET    /manifest.json
-POST   /admin/upload-basezip
-POST   /admin/add-file
-DELETE /admin/remove-file
-POST   /admin/publish
+```powershell
+npm.cmd run admin:start
 ```
 
-`POST /admin/add-file` accepts a multipart field `file` and optional `path`.
-The path must stay under `mods/`, `config/`, or `resourcepacks/`.
+Ouvrir `http://localhost:3030/admin/`.
 
-`DELETE /admin/remove-file` accepts JSON:
+Le panel permet de:
 
-```json
-{
-    "path": "mods/old-mod.jar"
-}
-```
+- ajouter plusieurs mods au brouillon;
+- supprimer un mod du brouillon;
+- modifier les versions du modpack, du launcher, de Minecraft et du loader;
+- publier le modpack et regenerer tous les hashes;
+- publier les artefacts de mise a jour du launcher.
 
-`POST /admin/publish` accepts an optional version:
+Le bouton `Publier le modpack` copie le brouillon dans le dossier public,
+reconstruit `base.zip`, puis ecrit `manifest.json`. Un mod supprime disparait
+du manifest et sera donc supprime chez les joueurs.
 
-```json
-{
-    "version": "0.0.6"
-}
-```
+## Mise a jour du launcher
 
-If the version is omitted, an existing published patch version is incremented.
+1. Modifier la version dans `package.json`.
+2. Configurer `publish.url` dans `electron-builder.yml`.
+3. Executer `npm.cmd run dist:win`.
+4. Dans le panel, selectionner `latest.yml`, l'installateur `.exe` et le
+   `.blockmap` produits dans `dist/`.
+5. Publier avec la meme version que `package.json`.
 
-## Launcher behavior
-
-When the player clicks Play:
-
-1. the launcher selects the built-in Khaeris local profile;
-2. it downloads `manifest.json`;
-3. if local `version.json` is absent or loader metadata changed, it downloads
-   and extracts `base.zip`;
-4. it checks every published file SHA256 and size;
-5. it downloads missing or changed files one by one;
-6. it removes old files which were present in the previous local
-   `version.json` but are no longer in the manifest;
-7. Helios local profile code downloads Minecraft or loader runtime files when
-   needed and starts Minecraft.
-
-The instance contains:
-
-```text
-instances\khaeris-fabric-1.20.1\
-|-- version.json
-|-- mods\
-|-- config\
-`-- resourcepacks\
-```
-
-## Files in this repo
-
-- `app/assets/js/simplemodpackmanager.js` installs `base.zip`, verifies files,
-  writes local `version.json`, and performs file updates.
-- `app/assets/js/scripts/landing.js` runs the modpack update before the local
-  profile launch path.
-- `app/assets/js/distromanager.js` keeps a tiny local Helios bootstrap object
-  for existing UI screens instead of fetching a remote distribution.
-- `web-admin/server.js` provides the Express admin API and manifest generator.
-- `web-admin/public/` contains the local admin panel.
+Au demarrage, le launcher compare `manifest.launcher.version` avec sa version
+installee. Si la version distante est plus recente, `electron-updater`
+telecharge les artefacts du dossier public `/launcher`.

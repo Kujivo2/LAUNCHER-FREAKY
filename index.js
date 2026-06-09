@@ -12,6 +12,7 @@ const semver                            = require('semver')
 const { pathToFileURL }                 = require('url')
 const { AZURE_CLIENT_ID, MSFT_OPCODE, MSFT_REPLY_TYPE, MSFT_ERROR, SHELL_OPCODE } = require('./app/assets/js/ipcconstants')
 const LangLoader                        = require('./app/assets/js/langloader')
+const LauncherConfig                    = require('./app/assets/js/launcherconfig')
 
 // Setup Lang
 LangLoader.setupLanguage()
@@ -29,6 +30,11 @@ function initAutoUpdater(event, data) {
     if(isDev){
         autoUpdater.autoInstallOnAppQuit = false
         autoUpdater.updateConfigPath = path.join(__dirname, 'dev-app-update.yml')
+    } else {
+        autoUpdater.setFeedURL({
+            provider: 'generic',
+            url: LauncherConfig.LAUNCHER_UPDATE_URL
+        })
     }
     if(process.platform === 'darwin'){
         autoUpdater.autoDownload = false

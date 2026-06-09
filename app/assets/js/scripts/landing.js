@@ -3,6 +3,7 @@
  */
 // Requirements
 const { URL }                 = require('url')
+const semver                  = require('semver')
 const {
     MojangRestAPI,
     getServerStatus
@@ -32,6 +33,7 @@ const DiscordWrapper          = require('./assets/js/discordwrapper')
 const LocalProfileBuilder     = require('./assets/js/localprofilebuilder')
 const ProcessBuilder          = require('./assets/js/processbuilder')
 const SimpleModpackManager    = require('./assets/js/simplemodpackmanager')
+const LauncherConfig          = require('./assets/js/launcherconfig')
 
 // Launch Elements
 const launch_content          = document.getElementById('launch_content')
@@ -1315,10 +1317,10 @@ async function loadNews(){
 async function checkModpackUpdate(){
 
     try {
-        const res = await fetch('http://localhost/khaeris/api/latest.json')
+        const res = await fetch(LauncherConfig.MANIFEST_URL, { cache: 'no-store' })
         const data = await res.json()
 
-        console.log('MODPACK API :', data)
+        console.log('MODPACK MANIFEST:', data)
 
     } catch(err){
         console.error('Erreur API modpack:', err)
@@ -1431,7 +1433,7 @@ async function refreshLauncherInfoPanel(){
     }
 
     try {
-        const res = await fetch('http://localhost/khaeris/news.json', { cache: 'no-store' })
+        const res = await fetch(LauncherConfig.NEWS_URL, { cache: 'no-store' })
         if(!res.ok){
             throw new Error(`HTTP ${res.status}`)
         }
@@ -1458,21 +1460,43 @@ async function refreshLauncherInfoPanel(){
 
 async function refreshLauncherInfoVersion(){
     const versionTarget = document.getElementById('serverRailLauncherVersion')
+    const modpackTarget = document.getElementById('serverRailModpackVersion')
+    const minecraftTarget = document.getElementById('serverRailMinecraftVersion')
+    const loaderTarget = document.getElementById('serverRailLoaderVersion')
     if(versionTarget == null){
         return
     }
 
+    versionTarget.textContent = `v${remote.app.getVersion()}`
+
     try {
-        const res = await fetch('http://localhost/khaeris/launcher-info.json', { cache: 'no-store' })
+        const res = await fetch(LauncherConfig.MANIFEST_URL, { cache: 'no-store' })
         if(!res.ok){
             throw new Error(`HTTP ${res.status}`)
         }
         const data = await res.json()
-        if(typeof data?.launcher?.version === 'string' && data.launcher.version.trim() !== ''){
-            versionTarget.textContent = data.launcher.version.trim()
+        if(modpackTarget != null){
+            modpackTarget.textContent = data.version || '-'
+        }
+        if(minecraftTarget != null){
+            minecraftTarget.textContent = data.minecraftVersion || '-'
+        }
+        if(loaderTarget != null){
+            loaderTarget.textContent = data.loader
+                ? `${data.loader}${data.loaderVersion ? ` ${data.loaderVersion}` : ''}`
+                : '-'
+        }
+        if(typeof data?.launcher?.version === 'string'){
+            const remoteVersion = data.launcher.version.replace(/^v/, '')
+            if(semver.valid(remoteVersion) && semver.gt(remoteVersion, remote.app.getVersion())){
+                document.getElementById('image_seal_container')?.setAttribute('update', true)
+                if(!isDev){
+                    ipcRenderer.send('autoUpdateAction', 'checkForUpdate')
+                }
+            }
         }
     } catch(err){
-        loggerLanding.warn('Unable to load launcher-info.json, keeping bundled launcher version.')
+        loggerLanding.warn('Unable to load manifest versions, keeping bundled values.')
         loggerLanding.debug(err)
     }
 }

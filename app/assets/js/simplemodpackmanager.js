@@ -8,10 +8,11 @@ const { pipeline } = require('stream/promises')
 const { LoggerUtil } = require('helios-core')
 
 const ConfigManager = require('./configmanager')
+const LauncherConfig = require('./launcherconfig')
 
 const logger = LoggerUtil.getLogger('SimpleModpack')
 
-const MODPACK_MANIFEST_URL = process.env.KHAERIS_MANIFEST_URL || 'http://localhost/khaeris/manifest.json'
+const MODPACK_MANIFEST_URL = LauncherConfig.MANIFEST_URL
 const LOCAL_VERSION_FILE = 'version.json'
 const MANAGED_ROOTS = new Set(['mods', 'config', 'resourcepacks'])
 const MODRINTH_API = 'https://api.modrinth.com/v2'
@@ -710,34 +711,33 @@ function assertRuntimeCompatibility(manifest, mods) {
 }
 
 async function ensureRuntimeCompatibility(instanceDir, manifest, onProgress) {
-    if(manifest.loader !== 'fabric') {
+    if(manifest.loader === 'fabric' && process.env.KHAERIS_ALLOW_RUNTIME_DOWNLOADS === 'true') {
+        onProgress({
+            phase: 'runtimeCheck',
+            file: 'Fabric runtime'
+        })
+
+        let mods = await readInstalledFabricMods(instanceDir)
+        const requiredLoader = getRequiredFabricLoaderVersion(mods)
+        manifest.loaderVersion = maxVersion(manifest.loaderVersion, requiredLoader, RECOMMENDED_FABRIC_LOADER_VERSION)
+
+        const sodiumVersion = await ensureSodium(instanceDir, manifest, mods, onProgress)
+        mods = await readInstalledFabricMods(instanceDir)
+        const fabricApiVersion = await ensureFabricApi(instanceDir, manifest, mods, onProgress)
+        mods = await readInstalledFabricMods(instanceDir)
+        assertRuntimeCompatibility(manifest, mods)
+
         return {
             loaderVersion: manifest.loaderVersion,
-            sodiumVersion: null,
-            fabricApiVersion: null
+            sodiumVersion,
+            fabricApiVersion,
+            source: 'modrinth'
         }
     }
 
-    onProgress({
-        phase: 'runtimeCheck',
-        file: 'Fabric runtime'
-    })
-
-    let mods = await readInstalledFabricMods(instanceDir)
-    const requiredLoader = getRequiredFabricLoaderVersion(mods)
-    manifest.loaderVersion = maxVersion(manifest.loaderVersion, requiredLoader, RECOMMENDED_FABRIC_LOADER_VERSION)
-
-    const sodiumVersion = await ensureSodium(instanceDir, manifest, mods, onProgress)
-    mods = await readInstalledFabricMods(instanceDir)
-    const fabricApiVersion = await ensureFabricApi(instanceDir, manifest, mods, onProgress)
-    mods = await readInstalledFabricMods(instanceDir)
-    assertRuntimeCompatibility(manifest, mods)
-
-    logger.info(`Fabric runtime OK: loader=${manifest.loaderVersion}, sodium=${sodiumVersion}, fabric-api=${fabricApiVersion}.`)
     return {
         loaderVersion: manifest.loaderVersion,
-        sodiumVersion,
-        fabricApiVersion
+        source: 'manifest'
     }
 }
 
@@ -865,6 +865,8 @@ exports.syncModpack = async function(onProgress = () => {}, options = {}) {
         removed
     }
 }
+
+exports.fetchManifest = fetchManifest
 
 exports.repairModpack = async function(onProgress = () => {}) {
     logger.info('Repair requested. Reinstalling Khaeris modpack from base.zip and manifest.')

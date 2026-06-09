@@ -18,6 +18,7 @@ const DRAFT_PACK_DIR = path.join(UPLOAD_DIR, `${MODPACK_ID}-draft`)
 const MANIFEST_PATH = path.join(WEB_ROOT, 'manifest.json')
 const NEWS_PATH = path.join(WEB_ROOT, 'news.json')
 const LAUNCHER_INFO_PATH = path.join(WEB_ROOT, 'launcher-info.json')
+const LAUNCHER_DIR = path.join(WEB_ROOT, 'launcher')
 const DRAFT_PATH = path.join(WEB_ROOT, 'api', 'draft.json')
 const PANEL_DIR = path.join(__dirname, 'public')
 const MIN_FABRIC_LOADER_VERSION = '0.18.0'
@@ -35,7 +36,7 @@ function ensureWebLayout() {
     fs.ensureDirSync(WEB_ROOT)
     fs.ensureDirSync(path.join(WEB_ROOT, 'api'))
     fs.ensureDirSync(path.join(WEB_ROOT, 'admin'))
-    fs.ensureDirSync(path.join(WEB_ROOT, 'launcher'))
+    fs.ensureDirSync(LAUNCHER_DIR)
     fs.ensureDirSync(path.join(WEB_ROOT, 'modpacks'))
     fs.ensureDirSync(UPLOAD_DIR)
     ensureManagedLayoutSync(PACK_DIR)
@@ -523,7 +524,7 @@ async function validateManifestPublication(manifest) {
     }
 }
 
-async function buildManifest(version, draft) {
+async function buildManifest(version, draft, launcherVersion = null) {
     await replaceManagedContent(DRAFT_PACK_DIR, PACK_DIR)
     const {
         files,
@@ -551,6 +552,13 @@ async function buildManifest(version, draft) {
         baseZip: asPublicUrl('modpacks', MODPACK_ID, 'base.zip'),
         baseZipSha256: await sha256(baseZipPath),
         baseZipSize: baseStat.size,
+        launcher: {
+            version: normalizeLauncherVersion(
+                launcherVersion,
+                draft.launcherVersion || 'v2.2.1'
+            ),
+            updateUrl: asPublicUrl('launcher')
+        },
         files: manifestFiles
     }
 }
@@ -562,7 +570,8 @@ async function buildLauncherInfo(versionLauncher = null, manifest = null) {
 
     return {
         launcher: {
-            version: nextVersion,
+            version: currentManifest?.launcher?.version || nextVersion,
+            updateUrl: currentManifest?.launcher?.updateUrl || asPublicUrl('launcher'),
             updatedAt: new Date().toISOString()
         },
         modpack: {
@@ -594,8 +603,10 @@ async function publishDraft(versionInput = null, options = {}) {
     const currentManifest = await readJsonIfPresent(MANIFEST_PATH, null)
     const version = versionInput
         ? normalizeVersion(versionInput)
-        : (currentManifest == null ? normalizeVersion(draft.version) : incrementVersion(currentManifest.version))
-    const manifest = await buildManifest(version, draft)
+        : (draft.version
+            ? normalizeVersion(draft.version)
+            : (currentManifest == null ? '0.0.1' : incrementVersion(currentManifest.version)))
+    const manifest = await buildManifest(version, draft, options.versionLauncher)
 
     console.log('[Publish] Web root:', WEB_ROOT)
     console.log('[Publish] Pack dir:', PACK_DIR)
@@ -616,6 +627,7 @@ async function publishDraft(versionInput = null, options = {}) {
     const validation = await validateManifestPublication(manifest)
     await writeDraft({
         version,
+        launcherVersion: manifest.launcher.version,
         dirty: false,
         publishedAt: new Date().toISOString()
     })
@@ -701,13 +713,45 @@ app.get('/admin/status', asyncRoute(async (_req, res) => {
     const draft = await readJsonIfPresent(DRAFT_PATH, {})
     const manifest = await readJsonIfPresent(MANIFEST_PATH, null)
     const launcherInfo = await readJsonIfPresent(LAUNCHER_INFO_PATH, null)
+    const files = await listContentFiles(DRAFT_PACK_DIR)
     res.json({
         webRoot: WEB_ROOT,
         publicBaseUrl: PUBLIC_BASE_URL,
         modpackId: MODPACK_ID,
         draft,
         manifest,
-        launcherInfo
+        launcherInfo,
+        files: files.map(file => file.path)
+    })
+}))
+
+app.post('/admin/settings', asyncRoute(async (req, res) => {
+    const patch = {
+        dirty: true
+    }
+    if(req.body.versionModpack != null && String(req.body.versionModpack).trim() !== '') {
+        patch.version = normalizeVersion(req.body.versionModpack)
+    }
+    if(req.body.versionLauncher != null && String(req.body.versionLauncher).trim() !== '') {
+        patch.launcherVersion = normalizeLauncherVersion(req.body.versionLauncher)
+    }
+    if(req.body.minecraftVersion != null && String(req.body.minecraftVersion).trim() !== '') {
+        patch.minecraftVersion = String(req.body.minecraftVersion).trim()
+    }
+    if(req.body.loader != null && String(req.body.loader).trim() !== '') {
+        patch.loader = parseLoaderId(req.body.loader).loader
+    }
+    if(req.body.loaderVersion != null) {
+        patch.loaderVersion = normalizeLoaderVersion(
+            patch.loader || (await readJsonIfPresent(DRAFT_PATH, {})).loader || 'fabric',
+            String(req.body.loaderVersion).trim()
+        )
+    }
+    const draft = await writeDraft(patch)
+    res.json({
+        ok: true,
+        message: 'Configuration du brouillon mise a jour.',
+        draft
     })
 }))
 
@@ -779,6 +823,43 @@ app.post('/admin/add-file', upload.single('file'), asyncRoute(async (req, res) =
     }
 }))
 
+app.post('/admin/add-mods', upload.array('mods', 200), asyncRoute(async (req, res) => {
+    if(!Array.isArray(req.files) || req.files.length === 0) {
+        res.status(400).json({
+            error: 'At least one .jar file is required.'
+        })
+        return
+    }
+
+    const added = []
+    try {
+        for(const file of req.files) {
+            if(!file.originalname.toLowerCase().endsWith('.jar')) {
+                throw new Error(`Only .jar files are accepted: ${file.originalname}`)
+            }
+            const targetPath = normalizeManagedPath(`mods/${safeUploadName(file.originalname)}`)
+            await fs.move(file.path, resolveManagedFile(targetPath, DRAFT_PACK_DIR), {
+                overwrite: true
+            })
+            added.push(targetPath)
+        }
+        const draft = await writeDraft({
+            dirty: true,
+            news: `${added.length} mod(s) ajoute(s) au modpack.`
+        })
+        res.json({
+            ok: true,
+            message: `${added.length} mod(s) ajoute(s) au brouillon.`,
+            added,
+            draft
+        })
+    } finally {
+        for(const file of req.files || []) {
+            await fs.remove(file.path)
+        }
+    }
+}))
+
 app.post('/admin/publish-mods', upload.array('mods', 200), asyncRoute(async (req, res) => {
     if(!Array.isArray(req.files) || req.files.length === 0) {
         res.status(400).json({
@@ -825,7 +906,19 @@ app.post('/admin/publish-mods', upload.array('mods', 200), asyncRoute(async (req
 }))
 
 app.post('/admin/publish-launcher-info', asyncRoute(async (req, res) => {
-    const launcherInfo = await publishLauncherInfo(req.body.versionLauncher)
+    const version = normalizeLauncherVersion(req.body.versionLauncher)
+    const manifest = await readJsonIfPresent(MANIFEST_PATH, null)
+    if(manifest != null) {
+        manifest.launcher = {
+            version,
+            updateUrl: asPublicUrl('launcher')
+        }
+        await writeJsonPublic(MANIFEST_PATH, manifest)
+    }
+    await writeDraft({
+        launcherVersion: version
+    })
+    const launcherInfo = await publishLauncherInfo(version, manifest)
     res.json({
         ok: true,
         message: 'Version launcher publiée avec succès.',
@@ -833,6 +926,53 @@ app.post('/admin/publish-launcher-info', asyncRoute(async (req, res) => {
         publicLauncherInfoUrl: asPublicUrl('launcher-info.json'),
         launcherInfo
     })
+}))
+
+app.post('/admin/publish-launcher', upload.array('artifacts', 20), asyncRoute(async (req, res) => {
+    if(!Array.isArray(req.files) || req.files.length === 0) {
+        res.status(400).json({
+            error: 'Launcher artifacts are required.'
+        })
+        return
+    }
+
+    try {
+        const version = normalizeLauncherVersion(req.body.versionLauncher)
+        const names = req.files.map(file => safeUploadName(file.originalname))
+        if(!names.some(name => name === 'latest.yml')) {
+            throw new Error('The Windows update set must include latest.yml.')
+        }
+        await fs.ensureDir(LAUNCHER_DIR)
+        for(let i=0; i<req.files.length; i++) {
+            await fs.move(req.files[i].path, path.join(LAUNCHER_DIR, names[i]), {
+                overwrite: true
+            })
+        }
+        const manifest = await readJsonIfPresent(MANIFEST_PATH, null)
+        if(manifest != null) {
+            manifest.launcher = {
+                version,
+                updateUrl: asPublicUrl('launcher')
+            }
+            await writeJsonPublic(MANIFEST_PATH, manifest)
+        }
+        await writeDraft({
+            launcherVersion: version
+        })
+        const launcherInfo = await publishLauncherInfo(version, manifest)
+        res.json({
+            ok: true,
+            message: 'Mise a jour du launcher publiee.',
+            version,
+            files: names,
+            updateUrl: asPublicUrl('launcher'),
+            launcherInfo
+        })
+    } finally {
+        for(const file of req.files || []) {
+            await fs.remove(file.path)
+        }
+    }
 }))
 
 app.delete('/admin/remove-file', asyncRoute(async (req, res) => {
@@ -856,8 +996,10 @@ app.post('/admin/publish', asyncRoute(async (req, res) => {
     const currentManifest = await readJsonIfPresent(MANIFEST_PATH, null)
     const version = req.body.version
         ? normalizeVersion(req.body.version)
-        : (currentManifest == null ? normalizeVersion(draft.version) : incrementVersion(currentManifest.version))
-    const manifest = await buildManifest(version, draft)
+        : (draft.version
+            ? normalizeVersion(draft.version)
+            : (currentManifest == null ? '0.0.1' : incrementVersion(currentManifest.version)))
+    const manifest = await buildManifest(version, draft, req.body.versionLauncher || draft.launcherVersion)
 
     console.log('[Publish] Web root:', WEB_ROOT)
     console.log('[Publish] Pack dir:', PACK_DIR)
@@ -865,6 +1007,7 @@ app.post('/admin/publish', asyncRoute(async (req, res) => {
     console.log('[Publish] BaseZip path:', BASE_ZIP_PATH)
     await writeJsonPublic(MANIFEST_PATH, manifest)
     await writeJsonPublic(NEWS_PATH, buildNews(version, draft))
+    const launcherInfo = await publishLauncherInfo(manifest.launcher.version, manifest)
 
     assertPublishedPath(WEB_ROOT, 'Web root')
     assertPublishedPath(path.join(WEB_ROOT, 'modpacks'), 'modpacks directory')
@@ -898,6 +1041,7 @@ app.post('/admin/publish', asyncRoute(async (req, res) => {
             news: fs.existsSync(NEWS_PATH)
         },
         manifest,
+        launcherInfo,
         validation
     })
 }))

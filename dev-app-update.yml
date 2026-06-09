@@ -1,3 +1,2 @@
-owner: dscalzi
-repo: HeliosLauncher
-provider: github
+provider: generic
+url: http://localhost/khaeris/launcher

@@ -49,3 +49,7 @@ linux:
 directories:
   buildResources: 'build'
   output: 'dist'
+
+publish:
+  provider: 'generic'
+  url: 'https://example.com/khaeris/launcher'
